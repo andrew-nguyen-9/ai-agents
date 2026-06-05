@@ -16,10 +16,32 @@ A job record (for `add`) is a JSON object. Recognized fields:
   fit_rating, fit_reason, url, source_query, posting (full JD text)
 Anything missing is left blank. `id` is auto-slugged from company+role if absent.
 """
-import sys, os, json, re, datetime
+import sys, os, json, re, datetime, contextlib
 from pathlib import Path
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill
+
+try:
+    import fcntl  # POSIX advisory file locking (Linux/macOS)
+except ImportError:
+    fcntl = None
+
+
+@contextlib.contextmanager
+def file_lock(path):
+    """Exclusive cross-process lock so parallel `add` calls can't clobber the xlsx.
+    Falls back to a no-op if fcntl is unavailable."""
+    if fcntl is None:
+        yield
+        return
+    lock_path = str(path) + ".lock"
+    f = open(lock_path, "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX)   # blocks until the lock is free
+        yield
+    finally:
+        fcntl.flock(f, fcntl.LOCK_UN)
+        f.close()
 
 ROOT = Path(__file__).resolve().parents[2]          # the "Job Finding" folder
 XLSX = ROOT / "tracker.xlsx"
@@ -142,40 +164,43 @@ def cmd_add(src):
     raw = sys.stdin.read() if src == "-" else Path(src).read_text()
     data = json.loads(raw)
     jobs = data if isinstance(data, list) else [data]
-    wb, ws = load_or_create()
-    ids, urls = existing_keys(ws)
     added, low, skipped = [], [], []
-    for job in jobs:
-        jid = job.get("id") or slugify(job.get("company",""), job.get("role",""))
-        url = (job.get("url") or "").strip()
-        if jid in ids or (url and url in urls):
-            skipped.append(jid); continue
-        qualified = is_qualified(job)
-        rec = {c: job.get(c, "") for c in COLUMNS}
-        rec["id"] = jid
-        rec["date_found"] = today()
-        rec["status"] = "Found" if qualified else "Skipped (low fit)"
-        rec["decision"] = ""
-        append_row(ws, rec)
-        ids.add(jid)
-        if url: urls.add(url)
-        if qualified:
-            # only qualified jobs get a folder + the saved JD
-            folder = JOBS / jid
-            folder.mkdir(parents=True, exist_ok=True)
-            posting = job.get("posting", "")
-            if posting:
-                (folder / "posting.txt").write_text(posting)
-            meta = {k: job.get(k) for k in (
-                "company","role","location","remote","pay_range","industry","ats",
-                "url","source_query","fit_rating","fit_reason","qualified") if k in job}
-            meta["id"] = jid
-            meta["date_found"] = today()
-            (folder / "meta.json").write_text(json.dumps(meta, indent=2))
-            added.append(jid)
-        else:
-            low.append(jid)
-    wb.save(XLSX)
+    # Hold an exclusive lock across read->append->save so parallel agents (one per
+    # job board) serialize their writes and each sees the others' just-added rows.
+    with file_lock(XLSX):
+        wb, ws = load_or_create()
+        ids, urls = existing_keys(ws)
+        for job in jobs:
+            jid = job.get("id") or slugify(job.get("company",""), job.get("role",""))
+            url = (job.get("url") or "").strip()
+            if jid in ids or (url and url in urls):
+                skipped.append(jid); continue
+            qualified = is_qualified(job)
+            rec = {c: job.get(c, "") for c in COLUMNS}
+            rec["id"] = jid
+            rec["date_found"] = today()
+            rec["status"] = "Found" if qualified else "Skipped (low fit)"
+            rec["decision"] = ""
+            append_row(ws, rec)
+            ids.add(jid)
+            if url: urls.add(url)
+            if qualified:
+                # only qualified jobs get a folder + the saved JD
+                folder = JOBS / jid
+                folder.mkdir(parents=True, exist_ok=True)
+                posting = job.get("posting", "")
+                if posting:
+                    (folder / "posting.txt").write_text(posting)
+                meta = {k: job.get(k) for k in (
+                    "company","role","location","remote","pay_range","industry","ats",
+                    "url","source_query","fit_rating","fit_reason","qualified") if k in job}
+                meta["id"] = jid
+                meta["date_found"] = today()
+                (folder / "meta.json").write_text(json.dumps(meta, indent=2))
+                added.append(jid)
+            else:
+                low.append(jid)
+        wb.save(XLSX)
     print(f"add: {len(added)} qualified (saved), {len(low)} low-fit (tracked only), "
           f"{len(skipped)} skipped (dupes)")
     if added:   print("  saved:   " + ", ".join(added))

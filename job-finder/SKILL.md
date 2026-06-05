@@ -17,15 +17,45 @@ is `/sessions/<session>/mnt/Job Finding/`.
    stop and tell Andrew to open Chrome with the Claude extension and connect it, then
    re-run. Everything below needs a live, logged-in browser.
 2. Make sure `tracker.xlsx` exists: `python3 automation/job-finder/tracker.py init`.
-3. Read `automation/job-finder/queries.txt` for the active query list, and skim
-   `profile/` (resume, positioning, experience-bank, voice) so scoring is grounded.
+3. Get the ready-to-run search URLs and skim the profile so scoring is grounded:
+   `python3 automation/job-finder/queries.py --urls` (prints one Google URL per active
+   query; it builds and encodes them for you). The query list itself is the editable dict
+   in `queries.py` — preview it with `python3 automation/job-finder/queries.py`. Also skim
+   `profile/` (resume, positioning, experience-bank, voice).
+
+## Run modes — sequential or parallel
+Steps 1–6 below are the **per-board routine** for one worker. You can run that routine
+one of two ways:
+
+**Sequential (default).** A single worker uses one tab and sweeps every active query
+(`queries.py --urls`). Simplest; fine for a small query set.
+
+**Parallel (faster).** Spawn one subagent per job board so the boards sweep at the same
+time. The Chrome MCP serializes actions across agents, so this is safe **only if each
+agent stays in its own tab**. Coordinator steps:
+1. List the active boards: `python3 automation/job-finder/queries.py --list-boards`
+   (e.g. `ashby`, `greenhouse`, `greenhouse_new`, `lever`).
+2. Launch one subagent per board (use the Agent tool; they run concurrently). Give each
+   subagent exactly this brief, substituting `<BOARD>`:
+   > You are the `<BOARD>` job-finder worker. Call `tabs_create_mcp` once to claim your
+   > own tab; remember that tabId and pass it on **every** browser call. Never act on any
+   > other tab. Get your URLs with
+   > `python3 automation/job-finder/queries.py --urls --board <BOARD>` and run Steps 1–6
+   > of the job-finder SKILL on them. De-dupe against `tracker.xlsx`, then record results
+   > with `python3 automation/job-finder/tracker.py add -` (writes are lock-safe for
+   > concurrent agents). Report a one-line summary: new qualified, low-fit, dupes.
+3. Wait for all subagents to finish. Each wrote its own rows; `tracker.py`'s exclusive
+   lock guarantees no two agents clobber the spreadsheet and that cross-board duplicates
+   are caught by whichever agent commits first.
+4. Read `tracker.xlsx` and give Andrew the combined summary (Step 6).
+
+Notes for parallel mode: the per-tab rule is mandatory — a worker must `tabs_create_mcp`
+its own tab and pass that `tabId` explicitly everywhere. Don't share a tab; don't reuse
+another agent's tab. Pacing (~2–5s between requests) still applies per worker.
 
 ## Step 1 — Run each query in Chrome
-For every active (non-`#`) line in `queries.txt`:
-- Build the URL: `https://www.google.com/search?q=<url-encoded query before any &>` then
-  append any `&tbs=...` flag verbatim. Example line
-  `"Data Analyst" site:jobs.ashbyhq.com remote &tbs=qdr:d` →
-  `https://www.google.com/search?q=%22Data%20Analyst%22%20site%3Ajobs.ashbyhq.com%20remote&tbs=qdr:d`
+For every URL from `python3 automation/job-finder/queries.py --urls`
+(parallel mode: add `--board <BOARD>` to sweep just this worker's board):
 - `navigate` there, then `get_page_text` / `read_page` to collect the result links.
 - If a CAPTCHA appears, ask Andrew to solve it in the browser, then continue. Do **not**
   try to bypass it.
@@ -95,6 +125,7 @@ best ones (company — role — rating — pay — link). Point him at `tracker.
 ## Notes
 - Never auto-apply, submit, or sign in anywhere. Find and record only.
 - Never fabricate pay, location, or remote status — leave blank if the posting is silent.
-- To change what gets searched, edit `queries.txt`. To change the schema, edit `tracker.py`.
+- To change what gets searched, edit the `GROUPS` dict in `queries.py` (comment a term
+  line in/out, or flip a group's `"on"`). To change the schema, edit `tracker.py`.
 - Fully unattended overnight runs aren't possible with Chrome (needs your machine awake);
   the Bright Data SERP scraper is the upgrade path if you want that later.
