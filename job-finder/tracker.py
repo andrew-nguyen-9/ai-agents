@@ -125,42 +125,61 @@ def cmd_seed():
     wb.save(XLSX)
     print(f"seed: added {added} existing applications ({ws.max_row-1} total rows)")
 
+def is_qualified(job, min_fit=3):
+    """Gate for saving a JD + folder. Qualified = explicit Yes/Stretch/Maybe,
+    or (when unspecified) a fit_rating at/above min_fit. Explicit No/Skip = not."""
+    q = str(job.get("qualified", "")).strip().lower()
+    if q in ("no", "skip", "n"):
+        return False
+    if q in ("yes", "stretch", "maybe", "y"):
+        return True
+    try:
+        return float(job.get("fit_rating", 0)) >= min_fit
+    except (TypeError, ValueError):
+        return False
+
 def cmd_add(src):
     raw = sys.stdin.read() if src == "-" else Path(src).read_text()
     data = json.loads(raw)
     jobs = data if isinstance(data, list) else [data]
     wb, ws = load_or_create()
     ids, urls = existing_keys(ws)
-    added, skipped = [], []
+    added, low, skipped = [], [], []
     for job in jobs:
         jid = job.get("id") or slugify(job.get("company",""), job.get("role",""))
         url = (job.get("url") or "").strip()
         if jid in ids or (url and url in urls):
             skipped.append(jid); continue
+        qualified = is_qualified(job)
         rec = {c: job.get(c, "") for c in COLUMNS}
         rec["id"] = jid
         rec["date_found"] = today()
-        rec["status"] = "Found"
+        rec["status"] = "Found" if qualified else "Skipped (low fit)"
         rec["decision"] = ""
         append_row(ws, rec)
         ids.add(jid)
         if url: urls.add(url)
-        # create the job folder
-        folder = JOBS / jid
-        folder.mkdir(parents=True, exist_ok=True)
-        posting = job.get("posting", "")
-        if posting:
-            (folder / "posting.txt").write_text(posting)
-        meta = {k: job.get(k) for k in (
-            "company","role","location","remote","pay_range","industry","ats",
-            "url","source_query","fit_rating","fit_reason","qualified") if k in job}
-        meta["id"] = jid
-        meta["date_found"] = today()
-        (folder / "meta.json").write_text(json.dumps(meta, indent=2))
-        added.append(jid)
+        if qualified:
+            # only qualified jobs get a folder + the saved JD
+            folder = JOBS / jid
+            folder.mkdir(parents=True, exist_ok=True)
+            posting = job.get("posting", "")
+            if posting:
+                (folder / "posting.txt").write_text(posting)
+            meta = {k: job.get(k) for k in (
+                "company","role","location","remote","pay_range","industry","ats",
+                "url","source_query","fit_rating","fit_reason","qualified") if k in job}
+            meta["id"] = jid
+            meta["date_found"] = today()
+            (folder / "meta.json").write_text(json.dumps(meta, indent=2))
+            added.append(jid)
+        else:
+            low.append(jid)
     wb.save(XLSX)
-    print(f"add: {len(added)} new, {len(skipped)} skipped (dupes)")
-    if added:   print("  added:   " + ", ".join(added))
+    print(f"add: {len(added)} qualified (saved), {len(low)} low-fit (tracked only), "
+          f"{len(skipped)} skipped (dupes)")
+    if added:   print("  saved:   " + ", ".join(added))
+    if low:     print("  low-fit: " + ", ".join(low))
     if skipped: print("  skipped: " + ", ".join(skipped))
 
 def main():

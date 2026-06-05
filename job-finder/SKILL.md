@@ -29,7 +29,10 @@ For every active (non-`#`) line in `queries.txt`:
 - `navigate` there, then `get_page_text` / `read_page` to collect the result links.
 - If a CAPTCHA appears, ask Andrew to solve it in the browser, then continue. Do **not**
   try to bypass it.
-- Collect candidate posting URLs (the actual ATS links, e.g. `jobs.ashbyhq.com/...`).
+- Collect candidate posting URLs. The text view truncates URLs — use `find` ("job posting
+  result links to <board>") to get the real `href`s.
+- **Pace requests:** wait a randomized ~2–5s between searches so you're not hammering
+  Google. This is politeness/rate-limiting, not an attempt to disguise the automation.
 
 ## Step 2 — De-dupe before opening
 Load existing keys so you don't re-process known jobs:
@@ -37,8 +40,10 @@ Load existing keys so you don't re-process known jobs:
 Skip any candidate whose URL already appears. (`tracker.py add` also de-dupes by id and
 url as a safety net, so it's fine to be approximate here.)
 
-## Step 3 — Open each new posting and extract
-Navigate to the posting and `get_page_text`. Pull:
+## Step 3 — Open EACH new posting individually and read the JD
+Loop the new candidate links one at a time. For each: `navigate` to the posting,
+`get_page_text` to read the **full job description**, then wait a randomized ~2–5s
+before the next one (pacing, as above). Pull:
 - `company`, `role`, `location`, `remote` (Remote / Hybrid / Onsite)
 - `pay_range` (as posted; blank if absent — never invent one)
 - `industry` (infer: Fintech, Legal Tech, Healthcare, SaaS, etc.)
@@ -57,9 +62,18 @@ Set `qualified` (Yes / Stretch / No) and `fit_rating` (1–5) using the rubric i
 - 1 = off-profile or a hard disqualifier (clearance, must-relocate city, etc.)
 Add a one-line `fit_reason`. Be honest — low scores are useful signal.
 
+**The qualification gate:** set `qualified` to Yes / Stretch / Maybe for jobs worth
+pursuing, or No for the rest. This drives what gets saved (Step 5): qualified jobs get a
+`jobs/<id>/` folder with the JD saved to `posting.txt`; non-qualified jobs are recorded in
+the tracker as a thin "Skipped (low fit)" row only (no folder), so they aren't re-opened on
+the next run. `tracker.py` applies the gate automatically (qualified, or `fit_rating ≥ 3`
+when `qualified` is blank).
+
 ## Step 5 — Write results (Excel + folder, in one call)
-Assemble a JSON array of the new jobs and pipe it to the helper, which appends de-duped
-rows to `tracker.xlsx` and creates each `jobs/<id>/` with `posting.txt` + `meta.json`:
+Assemble a JSON array of the new jobs (including the full `posting` text you read) and pipe
+it to the helper. It appends de-duped rows to `tracker.xlsx`, and for **qualified** jobs
+creates `jobs/<id>/` with `posting.txt` + `meta.json`; non-qualified jobs are tracked as a
+thin row only:
 
 ```bash
 python3 automation/job-finder/tracker.py add - <<'JSON'
