@@ -1,0 +1,39 @@
+# Job Finder — query list
+# One Google search per line. Lines starting with # are ignored.
+# Syntax is whatever you'd type into Google. Useful operators:
+#   site:jobs.ashbyhq.com        restrict to one ATS board
+#   "Data Analyst"               exact phrase
+#   remote                       plain keyword
+#   &tbs=qdr:d                   freshness filter: qdr:d = past day, qdr:w = past week, qdr:h = past hour
+# Tip: keep a daily set on qdr:d (small, fresh) and a wider weekly set on qdr:w.
+# Edit freely — the finder loops over every active line.
+
+# --- Ashby ---
+"Data Analyst" site:jobs.ashbyhq.com remote &tbs=qdr:d
+"Analytics Engineer" site:jobs.ashbyhq.com remote &tbs=qdr:d
+"Data Scientist" site:jobs.ashbyhq.com remote &tbs=qdr:d
+"Analytics" site:jobs.ashbyhq.com remote &tbs=qdr:d
+"Data Analyst" site:jobs.ashbyhq.com Chicago &tbs=qdr:d
+"Analytics Engineer" site:jobs.ashbyhq.com Chicago &tbs=qdr:d
+"Data Scientist" site:jobs.ashbyhq.com Chicago &tbs=qdr:d
+"Analytics" site:jobs.ashbyhq.com Chicago &tbs=qdr:d
+
+# --- Greenhouse ---
+"Data Analyst" site:boards.greenhouse.io remote &tbs=qdr:d
+"Analytics Engineer" site:job-boards.greenhouse.io remote &tbs=qdr:d
+"BI Analyst" site:boards.greenhouse.io remote &tbs=qdr:d
+"Data Analyst" site:boards.greenhouse.io Chicago &tbs=qdr:d
+"Analytics Engineer" site:job-boards.greenhouse.io Chicago &tbs=qdr:d
+"BI Analyst" site:boards.greenhouse.io Chicago &tbs=qdr:d
+
+# --- Lever ---
+"Data" site:jobs.lever.co remote &tbs=qdr:d
+"Analytics" site:jobs.lever.co remote &tbs=qdr:d
+"Data" site:jobs.lever.co Chicago &tbs=qdr:d
+"Analytics" site:jobs.lever.co Chicago &tbs=qdr:d
+
+# --- Weekly wider sweep (uncomment to use) ---
+"Forensic" OR "litigation" "data" site:jobs.ashbyhq.com remote &tbs=qdr:w
+"Product Analyst" site:boards.greenhouse.io remote &tbs=qdr:w
+"Forensic" OR "litigation" "data" site:jobs.ashbyhq.com Chicago &tbs=qdr:w
+"Product Analyst" site:boards.greenhouse.io Chicago &tbs=qdr:w
