@@ -1,9 +1,9 @@
 ---
-name: job-finder
-description: Sweep saved Google "dork" searches via Claude in Chrome, extract and fit-score new job postings against Andrew's profile, and write them to tracker.xlsx + a jobs/<id>/ folder. Trigger when Andrew says "run the job finder", "find new jobs", or "do a job sweep".
+name: lewis
+description: Lewis — the job finder. Sweeps saved Google "dork" searches via Claude in Chrome, extracts and fit-scores new job postings against Andrew's profile, and writes them to tracker.xlsx + a jobs/<id>/ folder. Trigger when Andrew says "run Lewis", "run the job finder", "find new jobs", or "do a job sweep". (Named for Lewis of Lewis & Clark — the scout who maps the territory ahead. Clark is the applier.)
 ---
 
-# Job Finder
+# Lewis — Job Finder
 
 Find new job postings, score them against Andrew's profile, and record each one in
 **two places**: a row in `tracker.xlsx` and a folder `jobs/<id>/` (with `posting.txt`
@@ -16,11 +16,11 @@ is `/sessions/<session>/mnt/Job Finding/`.
 1. **Chrome must be connected.** Call `list_connected_browsers`. If it returns `[]`,
    stop and tell Andrew to open Chrome with the Claude extension and connect it, then
    re-run. Everything below needs a live, logged-in browser.
-2. Make sure `tracker.xlsx` exists: `python3 automation/job-finder/tracker.py init`.
+2. Make sure `tracker.xlsx` exists: `python3 automation/lewis/tracker.py init`.
 3. Get the ready-to-run search URLs and skim the profile so scoring is grounded:
-   `python3 automation/job-finder/queries.py --urls` (prints one Google URL per active
+   `python3 automation/lewis/queries.py --urls` (prints one Google URL per active
    query; it builds and encodes them for you). The query list itself is the editable dict
-   in `queries.py` — preview it with `python3 automation/job-finder/queries.py`. Also skim
+   in `queries.py` — preview it with `python3 automation/lewis/queries.py`. Also skim
    `profile/` (resume, positioning, experience-bank, voice).
 
 ## Run modes — sequential or parallel
@@ -33,16 +33,16 @@ one of two ways:
 **Parallel (faster).** Spawn one subagent per job board so the boards sweep at the same
 time. The Chrome MCP serializes actions across agents, so this is safe **only if each
 agent stays in its own tab**. Coordinator steps:
-1. List the active boards: `python3 automation/job-finder/queries.py --list-boards`
+1. List the active boards: `python3 automation/lewis/queries.py --list-boards`
    (e.g. `ashby`, `greenhouse`, `greenhouse_new`, `lever`).
 2. Launch one subagent per board (use the Agent tool; they run concurrently). Give each
    subagent exactly this brief, substituting `<BOARD>`:
    > You are the `<BOARD>` job-finder worker. Call `tabs_create_mcp` once to claim your
    > own tab; remember that tabId and pass it on **every** browser call. Never act on any
    > other tab. Get your URLs with
-   > `python3 automation/job-finder/queries.py --urls --board <BOARD>` and run Steps 1–6
+   > `python3 automation/lewis/queries.py --urls --board <BOARD>` and run Steps 1–6
    > of the job-finder SKILL on them. De-dupe against `tracker.xlsx`, then record results
-   > with `python3 automation/job-finder/tracker.py add -` (writes are lock-safe for
+   > with `python3 automation/lewis/tracker.py add -` (writes are lock-safe for
    > concurrent agents). Report a one-line summary: new qualified, low-fit, dupes.
 3. Wait for all subagents to finish. Each wrote its own rows; `tracker.py`'s exclusive
    lock guarantees no two agents clobber the spreadsheet and that cross-board duplicates
@@ -54,7 +54,7 @@ its own tab and pass that `tabId` explicitly everywhere. Don't share a tab; don'
 another agent's tab. Pacing (~2–5s between requests) still applies per worker.
 
 ## Step 1 — Run each query in Chrome
-For every URL from `python3 automation/job-finder/queries.py --urls`
+For every URL from `python3 automation/lewis/queries.py --urls`
 (parallel mode: add `--board <BOARD>` to sweep just this worker's board):
 - `navigate` there, then `get_page_text` / `read_page` to collect the result links.
 - If a CAPTCHA appears, ask Andrew to solve it in the browser, then continue. Do **not**
@@ -106,7 +106,7 @@ creates `jobs/<id>/` with `posting.txt` + `meta.json`; non-qualified jobs are tr
 thin row only:
 
 ```bash
-python3 automation/job-finder/tracker.py add - <<'JSON'
+python3 automation/lewis/tracker.py add - <<'JSON'
 [
   {"company":"...","role":"...","location":"...","remote":"Remote","pay_range":"...",
    "industry":"...","ats":"Ashby","qualified":"Yes","fit_rating":4,

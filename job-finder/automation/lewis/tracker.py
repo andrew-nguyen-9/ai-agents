@@ -9,7 +9,7 @@ Subcommands:
                             Pass "-" to read JSON from stdin.
 
 The master file is <ROOT>/tracker.xlsx. ROOT is the "Job Finding" folder, inferred
-as two levels up from this script (automation/job-finder/tracker.py).
+as two levels up from this script (automation/lewis/tracker.py).
 
 A job record (for `add`) is a JSON object. Recognized fields:
   company, role, location, remote, pay_range, industry, ats, qualified,
