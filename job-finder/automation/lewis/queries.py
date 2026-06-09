@@ -14,11 +14,14 @@ Preview what will run:
     python3 queries.py --all            # include disabled groups/terms too
     python3 queries.py --board ashby    # only one board (repeatable; for parallel agents)
     python3 queries.py --list-boards    # distinct active boards (one per line)
+    python3 queries.py --urls --pending # URLs not yet marked done in this session
 
 The finder (see SKILL.md) consumes `python3 queries.py --urls`. In parallel mode each
-subagent runs `--urls --board <key>` so it sweeps only its own job board.
+subagent runs `--urls --board <key> --pending` so it sweeps only its own pending queries.
 """
 
+import json
+from pathlib import Path
 from urllib.parse import quote
 
 # --- Freshness filters (Google &tbs= values) -------------------------------
@@ -200,6 +203,16 @@ if __name__ == "__main__":
         sys.exit(0)
 
     rows = build(include_disabled=include, boards=boards)
+
+    if "--pending" in argv:
+        session_file = Path(__file__).resolve().parents[2] / "session-state.json"
+        done = set()
+        if session_file.exists():
+            import json as _json
+            state = _json.loads(session_file.read_text())
+            done = set(state.get("queries_done", []))
+        rows = [r for r in rows if r["url"] not in done]
+
     if "--urls" in argv:
         for r in rows:
             print(r["url"])
