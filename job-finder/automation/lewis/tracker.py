@@ -7,6 +7,10 @@ Subcommands:
   seed                      Seed rows from the existing jobs/ folders (via INDEX.md).
   add  <jobs.json>          Append found jobs (de-duped) + create jobs/<id>/ folders.
                             Pass "-" to read JSON from stdin.
+  urls                      Print all tracked URLs (one per line) for fast de-dup.
+  session <sub>             Manage session state for resume-from-interruption.
+                            Subs: status | resume | start | mark-query <url> |
+                                  mark-url <url> | seen-urls
 
 The master file is <ROOT>/tracker.xlsx. ROOT is the "Job Finding" folder, inferred
 as two levels up from this script (automation/lewis/tracker.py).
@@ -46,6 +50,7 @@ def file_lock(path):
 ROOT = Path(__file__).resolve().parents[2]          # the "Job Finding" folder
 XLSX = ROOT / "tracker.xlsx"
 JOBS = ROOT / "jobs"
+SESSION_FILE = ROOT / "session-state.json"
 SHEET = "jobs"
 
 COLUMNS = [
@@ -207,6 +212,63 @@ def cmd_add(src):
     if low:     print("  low-fit: " + ", ".join(low))
     if skipped: print("  skipped: " + ", ".join(skipped))
 
+def cmd_urls():
+    wb, ws = load_or_create()
+    _, urls = existing_keys(ws)
+    for u in sorted(urls):
+        print(u)
+
+def cmd_session(args):
+    def _load():
+        return json.loads(SESSION_FILE.read_text()) if SESSION_FILE.exists() else {}
+    def _save(s):
+        SESSION_FILE.write_text(json.dumps(s, indent=2))
+    def _blank():
+        return {"date": today(), "queries_done": [], "urls_seen": []}
+
+    sub = args[0] if args else "status"
+
+    if sub == "status":
+        s = _load()
+        print("No active session" if not s else json.dumps(s, indent=2))
+
+    elif sub == "resume":
+        s = _load()
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        if not s or s.get("date") not in (today(), yesterday):
+            _save(_blank())
+            print("started-fresh")
+        elif s["date"] == yesterday:
+            s.update({"date": today(), "queries_done": []})
+            _save(s)
+            print("resumed-new-day")
+        else:
+            print("resumed-same-day")
+
+    elif sub == "start":
+        _save(_blank())
+        print(f"started-{today()}")
+
+    elif sub == "mark-query" and len(args) > 1:
+        s = _load() or _blank()
+        if args[1] not in s["queries_done"]:
+            s["queries_done"].append(args[1])
+            _save(s)
+
+    elif sub == "mark-url" and len(args) > 1:
+        s = _load() or _blank()
+        if args[1] not in s["urls_seen"]:
+            s["urls_seen"].append(args[1])
+            _save(s)
+
+    elif sub == "seen-urls":
+        for u in _load().get("urls_seen", []):
+            print(u)
+
+    else:
+        print("usage: tracker.py session <status|resume|start|mark-query URL|mark-url URL|seen-urls>")
+        sys.exit(1)
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__); sys.exit(1)
@@ -217,6 +279,9 @@ def main():
         if len(sys.argv) < 3:
             print("usage: tracker.py add <jobs.json|->"); sys.exit(1)
         cmd_add(sys.argv[2])
+    elif cmd == "urls": cmd_urls()
+    elif cmd == "session":
+        cmd_session(sys.argv[2:])
     else:
         print(__doc__); sys.exit(1)
 

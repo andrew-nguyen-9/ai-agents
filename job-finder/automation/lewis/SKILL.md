@@ -1,131 +1,114 @@
 ---
 name: lewis
-description: Lewis — the job finder. Sweeps saved Google "dork" searches via Claude in Chrome, extracts and fit-scores new job postings against Andrew's profile, and writes them to tracker.xlsx + a jobs/<id>/ folder. Trigger when Andrew says "run Lewis", "run the job finder", "find new jobs", or "do a job sweep". (Named for Lewis of Lewis & Clark — the scout who maps the territory ahead. Clark is the applier.)
+description: Lewis — the job finder. Sweeps Google "dork" searches via Chrome, extracts and scores new job postings against Andrew's profile, and writes them to tracker.xlsx + jobs/<id>/. Trigger on: "run Lewis", "run the job finder", "find new jobs", "do a job sweep". (Named for Lewis of Lewis & Clark — the scout who maps the territory ahead.)
 ---
 
 # Lewis — Job Finder
 
-Find new job postings, score them against Andrew's profile, and record each one in
-**two places**: a row in `tracker.xlsx` and a folder `jobs/<id>/` (with `posting.txt`
-+ `meta.json`). This skill **only finds and records** — it never applies.
+Finds and records new job postings in **two places**: a row in `tracker.xlsx` and `jobs/<id>/` (with `posting.txt` + `meta.json`). Never applies.
 
-Paths assume this folder ("Job Finding") is the working directory. In bash the mount
-is `/sessions/<session>/mnt/Job Finding/`.
+Paths assume "Job Finding" is the working directory (`/sessions/<session>/mnt/Job Finding/`).
 
-## Prerequisites (check first)
-1. **Chrome must be connected.** Call `list_connected_browsers`. If it returns `[]`,
-   stop and tell Andrew to open Chrome with the Claude extension and connect it, then
-   re-run. Everything below needs a live, logged-in browser.
-2. Make sure `tracker.xlsx` exists: `python3 automation/lewis/tracker.py init`.
-3. Get the ready-to-run search URLs and skim the profile so scoring is grounded:
-   `python3 automation/lewis/queries.py --urls` (prints one Google URL per active
-   query; it builds and encodes them for you). The query list itself is the editable dict
-   in `queries.py` — preview it with `python3 automation/lewis/queries.py`. Also skim
-   `profile/` (resume, positioning, experience-bank, voice).
+## Prerequisites
+1. **Chrome connected:** `list_connected_browsers` → if `[]`, stop and tell Andrew to connect Chrome with the Claude extension, then re-run.
+2. **Tracker ready:** `python3 automation/lewis/tracker.py init`
+3. **Profile skimmed:** read `profile/` (resume, positioning, experience-bank, voice) — needed for scoring in Step 4.
 
-## Run modes — sequential or parallel
-Steps 1–6 below are the **per-board routine** for one worker. You can run that routine
-one of two ways:
+## Step 0 — Session resume (every run, before anything else)
+```bash
+python3 automation/lewis/tracker.py session resume
+# prints one of: started-fresh | resumed-same-day | resumed-new-day
+```
+- **resumed-same-day:** `--pending` (Step 1) will skip already-swept queries; `seen-urls` (Step 2) will skip already-opened postings. Pick up exactly where you left off.
+- **resumed-new-day:** queries_done is reset but urls_seen carries over — you'll re-sweep all queries but won't re-open postings already extracted yesterday.
+- **started-fresh:** clean slate.
 
-**Sequential (default).** A single worker uses one tab and sweeps every active query
-(`queries.py --urls`). Simplest; fine for a small query set.
+## Run modes
 
-**Parallel (faster).** Spawn one subagent per job board so the boards sweep at the same
-time. The Chrome MCP serializes actions across agents, so this is safe **only if each
-agent stays in its own tab**. Coordinator steps:
-1. List the active boards: `python3 automation/lewis/queries.py --list-boards`
-   (e.g. `ashby`, `greenhouse`, `greenhouse_new`, `lever`).
-2. Launch one subagent per board (use the Agent tool; they run concurrently). Give each
-   subagent exactly this brief, substituting `<BOARD>`:
-   > You are the `<BOARD>` job-finder worker. Call `tabs_create_mcp` once to claim your
-   > own tab; remember that tabId and pass it on **every** browser call. Never act on any
-   > other tab. Get your URLs with
-   > `python3 automation/lewis/queries.py --urls --board <BOARD>` and run Steps 1–6
-   > of the job-finder SKILL on them. De-dupe against `tracker.xlsx`, then record results
-   > with `python3 automation/lewis/tracker.py add -` (writes are lock-safe for
-   > concurrent agents). Report a one-line summary: new qualified, low-fit, dupes.
-3. Wait for all subagents to finish. Each wrote its own rows; `tracker.py`'s exclusive
-   lock guarantees no two agents clobber the spreadsheet and that cross-board duplicates
-   are caught by whichever agent commits first.
-4. Read `tracker.xlsx` and give Andrew the combined summary (Step 6).
+**Sequential (default):** single worker, sweeps all pending queries, opens new postings.
 
-Notes for parallel mode: the per-tab rule is mandatory — a worker must `tabs_create_mcp`
-its own tab and pass that `tabId` explicitly everywhere. Don't share a tab; don't reuse
-another agent's tab. Pacing (~2–5s between requests) still applies per worker.
+**Parallel (faster):** one subagent per board running concurrently. Coordinator steps:
+1. `python3 automation/lewis/queries.py --list-boards` — get active board keys.
+2. Launch one subagent per board (Agent tool, all at once). Give each this brief, substituting `<BOARD>`:
+   > Board worker `<BOARD>`. `tabs_create_mcp` → claim your own tab; pass that `tabId` on every browser call. Get your pending queries: `python3 automation/lewis/queries.py --urls --board <BOARD> --pending`. Run Steps 1–5 of the Lewis SKILL on them. After Step 3, score and write results. Report: new qualified, low-fit, dupes.
+3. Wait for all subagents. Combine results and give Andrew the summary (Step 6).
 
-## Step 1 — Run each query in Chrome
-For every URL from `python3 automation/lewis/queries.py --urls`
-(parallel mode: add `--board <BOARD>` to sweep just this worker's board):
-- `navigate` there, then `get_page_text` / `read_page` to collect the result links.
-- If a CAPTCHA appears, ask Andrew to solve it in the browser, then continue. Do **not**
-  try to bypass it.
-- Collect candidate posting URLs. The text view truncates URLs — use `find` ("job posting
-  result links to <board>") to get the real `href`s.
-- **Pace requests:** wait a randomized ~2–5s between searches so you're not hammering
-  Google. This is politeness/rate-limiting, not an attempt to disguise the automation.
+Notes: each subagent must `tabs_create_mcp` its own tab and never act on another agent's tab. Pacing (~2–5s between requests) applies per worker.
 
-## Step 2 — De-dupe before opening
-Load existing keys so you don't re-process known jobs:
-`python3 -c "import openpyxl;ws=openpyxl.load_workbook('tracker.xlsx')['jobs'];print([(r[0],r[11]) for r in ws.iter_rows(min_row=2,values_only=True)])"`
-Skip any candidate whose URL already appears. (`tracker.py add` also de-dupes by id and
-url as a safety net, so it's fine to be approximate here.)
+## Step 1 — Sweep pending queries
+```bash
+python3 automation/lewis/queries.py --urls --pending
+```
+(`--pending` skips queries already marked done in this session's `session-state.json`.)
 
-## Step 3 — Open EACH new posting individually and read the JD
-Loop the new candidate links one at a time. For each: `navigate` to the posting,
-`get_page_text` to read the **full job description**, then wait a randomized ~2–5s
-before the next one (pacing, as above). Pull:
+For each URL in the output:
+- `navigate` → `get_page_text` / `read_page` → collect candidate posting links.
+- Text view truncates URLs — use `find` to get real `href`s.
+- CAPTCHA: ask Andrew to solve it in the browser; do not attempt to bypass.
+- After sweeping: `python3 automation/lewis/tracker.py session mark-query <query-url>`
+- Pace: ~2–5s random delay between queries.
+
+## Step 2 — De-dupe candidates
+Build the skip list before opening anything:
+```bash
+# All URLs already in tracker (cross-session)
+python3 automation/lewis/tracker.py urls
+
+# URLs opened in this session (same-day resume)
+python3 automation/lewis/tracker.py session seen-urls
+```
+Skip any candidate whose URL appears in either list.
+
+## Step 3 — Extract new postings (parallel)
+You now have a list of new candidate URLs. Extract them in parallel to minimize wall-clock time.
+
+**If ≤3 new URLs:** open them yourself, one at a time.
+
+**If ≥4 new URLs:** split into batches of ~5. Spawn one extraction subagent per batch (all at once):
+> Extraction worker. `tabs_create_mcp` → claim your tab. For each URL in your batch: `navigate` → `get_page_text` → extract the fields listed below. After each URL: `python3 automation/lewis/tracker.py session mark-url <url>`. Pace ~2–5s between navigations. Return a JSON array of raw job objects. Do NOT score — return raw data only.
+
+Fields to extract per posting:
 - `company`, `role`, `location`, `remote` (Remote / Hybrid / Onsite)
-- `pay_range` (as posted; blank if absent — never invent one)
-- `industry` (infer: Fintech, Legal Tech, Healthcare, SaaS, etc.)
-- `ats` from the URL host: ashbyhq→Ashby, greenhouse→Greenhouse, lever→Lever,
-  myworkdayjobs→Workday, indeed→Indeed, else "other"
-- `posting` = the full job-description text (this becomes `jobs/<id>/posting.txt`)
-- `url`, and the `source_query` line that surfaced it
+- `pay_range` (as posted; blank if absent — never invent)
+- `industry` (Fintech, Legal Tech, Healthcare, SaaS, etc.)
+- `ats` (ashbyhq→Ashby, greenhouse→Greenhouse, lever→Lever, myworkdayjobs→Workday, else "other")
+- `posting` = full job description text
+- `url`, `source_query`
 
-## Step 4 — Score fit against the profile
-Set `qualified` (Yes / Stretch / No) and `fit_rating` (1–5) using the rubric in
-`AGENT-GAME-PLAN.md`:
-- 5 = data/analytics/AE role, Python+SQL core, domain he'd lean into, ~4 yrs fine, remote/Chicago
-- 4 = strong overlap, minor gap or slight seniority stretch
-- 3 = adjacent (PM / solutions / sales-eng where his data + client story transfers)
-- 2 = tangential / hits the 5-yr-min wall hard
-- 1 = off-profile or a hard disqualifier (clearance, must-relocate city, etc.)
-Add a one-line `fit_reason`. Be honest — low scores are useful signal.
+Wait for all extraction subagents. Merge their JSON arrays into one pool.
 
-**The qualification gate:** set `qualified` to Yes / Stretch / Maybe for jobs worth
-pursuing, or No for the rest. This drives what gets saved (Step 5): qualified jobs get a
-`jobs/<id>/` folder with the JD saved to `posting.txt`; non-qualified jobs are recorded in
-the tracker as a thin "Skipped (low fit)" row only (no folder), so they aren't re-opened on
-the next run. `tracker.py` applies the gate automatically (qualified, or `fit_rating ≥ 3`
-when `qualified` is blank).
+## Step 4 — Score fit (coordinator)
+Score each extracted job against the profile (already in context from Prerequisites):
 
-## Step 5 — Write results (Excel + folder, in one call)
-Assemble a JSON array of the new jobs (including the full `posting` text you read) and pipe
-it to the helper. It appends de-duped rows to `tracker.xlsx`, and for **qualified** jobs
-creates `jobs/<id>/` with `posting.txt` + `meta.json`; non-qualified jobs are tracked as a
-thin row only:
+| fit_rating | criteria |
+|---|---|
+| 5 | data/analytics/AE role, Python+SQL core, domain of interest, ~4 yrs ok, remote/Chicago |
+| 4 | strong overlap, minor gap or seniority stretch |
+| 3 | adjacent (PM / solutions / sales-eng where data + client story transfers) |
+| 2 | tangential / hits the 5-yr minimum hard |
+| 1 | off-profile or hard disqualifier (clearance, must-relocate city, etc.) |
 
+Set `qualified`: Yes / Stretch / Maybe for jobs worth pursuing; No for the rest. Add one-line `fit_reason`. Be honest — low scores are useful signal.
+
+**Qualification gate:** Yes / Stretch / Maybe or `fit_rating ≥ 3` → `jobs/<id>/` folder created. No / `fit_rating < 3` → thin tracker row only (still recorded so it won't be re-opened next run).
+
+## Step 5 — Write results
 ```bash
 python3 automation/lewis/tracker.py add - <<'JSON'
 [
   {"company":"...","role":"...","location":"...","remote":"Remote","pay_range":"...",
-   "industry":"...","ats":"Ashby","qualified":"Yes","fit_rating":4,
-   "fit_reason":"...","url":"https://...","source_query":"...","posting":"<full JD>"}
+   "industry":"...","ats":"Ashby","qualified":"Yes","fit_rating":4,"fit_reason":"...",
+   "url":"https://...","source_query":"...","posting":"<full JD text>"}
 ]
 JSON
 ```
-`id` is auto-slugged from company+role and matches the folder name. New rows get
-`status=Found` and a blank `decision` for Andrew to mark.
+`id` auto-slugged from company+role. `tracker.py` handles de-dup, folder creation, and file locking for concurrent writes.
 
 ## Step 6 — Report
-Give Andrew a short summary: how many new, how many rated 4+, and a compact list of the
-best ones (company — role — rating — pay — link). Point him at `tracker.xlsx` to mark the
-`decision` column (Apply / Skip / Maybe). Do not start applying.
+Short summary to Andrew: new jobs found, count rated 4+, compact list of the best ones (company — role — rating — pay — link). Point him at `tracker.xlsx` to mark the `decision` column (Apply / Skip / Maybe). Do not start applying.
 
 ## Notes
 - Never auto-apply, submit, or sign in anywhere. Find and record only.
 - Never fabricate pay, location, or remote status — leave blank if the posting is silent.
-- To change what gets searched, edit the `GROUPS` dict in `queries.py` (comment a term
-  line in/out, or flip a group's `"on"`). To change the schema, edit `tracker.py`.
-- Fully unattended overnight runs aren't possible with Chrome (needs your machine awake);
-  the Bright Data SERP scraper is the upgrade path if you want that later.
+- To change searches: edit `GROUPS` in `queries.py`. To change schema: edit `tracker.py`.
+- Overnight unattended runs require Bright Data SERP (future upgrade path).
